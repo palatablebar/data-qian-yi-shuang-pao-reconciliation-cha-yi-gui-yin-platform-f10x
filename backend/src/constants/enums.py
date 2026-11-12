@@ -19,6 +19,26 @@ class BatchStatus(StrEnum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    PARTIAL = "partial"
+
+
+class PairRunStatus(StrEnum):
+    """批次内单表对（表）级验收结论。
+
+    - verified：该表全部桶核对完成且无隔离记录，可出验收结论；
+    - quarantined：存在被隔离的坏记录，正常部分仍完成核对，但该表暂不能整体验收；
+    - blocked：加载/运行阶段异常（如整表不可读），未产出有效结论；
+    - pending：尚未执行（部分桶演示批次等场景）。
+    """
+
+    VERIFIED = "verified"
+    QUARANTINED = "quarantined"
+    BLOCKED = "blocked"
+    PENDING = "pending"
+
+
+class QuarantineReason(StrEnum):
+    NULL_PRIMARY_KEY = "null_primary_key"
 
 
 class BucketStatus(StrEnum):
@@ -78,4 +98,17 @@ DIFF_TYPE_LABELS = {
     DiffType.ENCODING: "编码差异",
     DiffType.VALUE_SHIFT: "值漂移",
     DiffType.DUPLICATE_KEY: "主键重复",
+}
+
+
+PAIR_RUN_STATUS_LABELS = {
+    PairRunStatus.VERIFIED: "可验收",
+    PairRunStatus.QUARANTINED: "待处理（含隔离记录）",
+    PairRunStatus.BLOCKED: "阻塞",
+    PairRunStatus.PENDING: "未执行",
+}
+
+
+QUARANTINE_REASON_LABELS = {
+    QuarantineReason.NULL_PRIMARY_KEY: "主键为空（null_primary_key）",
 }

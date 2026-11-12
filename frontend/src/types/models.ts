@@ -40,6 +40,43 @@ export interface Pair {
   created_at?: string;
 }
 
+export type PairRunStatus = 'verified' | 'quarantined' | 'blocked' | 'pending';
+
+export interface PairRunResult {
+  pair_code: string;
+  status: PairRunStatus;
+  status_label: string;
+  quarantine_count: number;
+  verified_buckets: number;
+  mismatched_buckets: number;
+  runs: number;
+  last_run_at: string | null;
+}
+
+export interface QuarantineRecord {
+  id: number;
+  batch_id: number;
+  pair_code: string;
+  source_side: string;
+  row_position: number;
+  primary_key_name: string;
+  primary_key_value: string | null;
+  reason: string;
+  reason_label: string;
+  row_snapshot: Record<string, unknown>;
+  resolved: boolean;
+  created_at: string;
+  resolved_at: string | null;
+}
+
+export interface QuarantineResponse {
+  batch_id: number;
+  total: number;
+  open_count: number;
+  resolved_count: number;
+  items: QuarantineRecord[];
+}
+
 export interface Batch {
   id: number;
   batch_no: string;
@@ -49,7 +86,7 @@ export interface Batch {
   bucket_count: number;
   sample_rate: number;
   window_days: number;
-  status: 'pending' | 'running' | 'completed' | 'failed';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'partial';
   buckets_total: number;
   buckets_matched: number;
   buckets_mismatched: number;
@@ -58,9 +95,11 @@ export interface Batch {
   tgt_rows: number;
   skip_rate: number;
   diff_count: number;
+  quarantine_count: number;
+  pair_results: PairRunResult[];
   failure_reason: string | null;
   params_json: Record<string, unknown>;
-  scan_cost_json: Record<string, number | string | Record<string, number>>;
+  scan_cost_json: Record<string, number | string | Record<string, number> | string[]>;
   created_by: number | null;
   started_at: string | null;
   finished_at: string | null;

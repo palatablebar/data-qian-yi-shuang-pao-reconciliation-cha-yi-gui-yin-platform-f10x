@@ -9,7 +9,7 @@ from src.controllers.auth_controller import write_audit
 from src.middlewares.rbac import require_permission
 from src.models.account import User
 from src.schemas.batch import BatchCreateRequest
-from src.services import batch_service, diff_service
+from src.services import batch_service, diff_service, quarantine_service
 
 
 def create_batch(
@@ -72,6 +72,16 @@ def list_buckets(
     db: Session = Depends(get_db),
 ) -> dict:
     return batch_service.list_buckets(db, batch_id, status)
+
+
+def list_quarantine(
+    batch_id: int,
+    pair_code: str | None = None,
+    resolved: bool | None = None,
+    user: User = Depends(require_permission("batches:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    return quarantine_service.list_quarantine(db, batch_id, pair_code=pair_code, resolved=resolved)
 
 
 def estimate(

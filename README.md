@@ -35,6 +35,10 @@
 - 5 个迁移表对维护（源表/目标表/主键/字段归一化规则/负责人）。
 - 批次发起：表对多选、策略、桶数 `N∈{64,128,256}`、抽样率、时间窗，实时预估扫描量。
 - Celery worker 真跑分桶对账，桶级 count/checksum 落库；128 桶热力矩阵 + 进度条。
+- 坏记录隔离：源表主键 NULL 等坏记录按「所属表对 / 原主键位置 / 隔离原因 / 整行快照」单独落入
+  `quarantine_records`，不参与 checksum、不计入一致，也不阻塞同批其他表出结论；批次按表给
+  `verified / quarantined / blocked` 结论，全部可验收才 `completed`，否则 `partial`。
+- 增量重跑：清理隔离项后重跑只重算受影响表，已验收表重复执行跳过、计数不重复（幂等）。
 - 差异下钻：按差异类型/桶/表对/字段筛选，展示源值→目标值、相似度、归因与建议。
 - 修复单：草稿 → 提交 → 审批（仅 admin），差异范围由后端按 (表, 字段, 分类) 汇总。
 - 验收导出：差异明细 CSV、归因汇总 CSV（UTF-8 BOM，HTTP 下载）。
@@ -57,7 +61,7 @@ docker compose exec -T backend python -m scripts.seed_demo
 真实 seed 输出（两次运行逐字一致）：
 
 ```
-SEED_SUMMARY pairs=5 src_rows=12000 tgt_rows=11968 batches=4 diffs=40 tickets=3 users=3
+SEED_SUMMARY pairs=5 src_rows=12000 tgt_rows=11968 batches=4 diffs=47 quarantine=1 tickets=3 users=3
 ```
 
 ## 本地开发
@@ -104,8 +108,14 @@ gb-553/
   3. 桶内 `count` 与 `checksum` 都相等 → `match` 并跳过抽样；
   4. 不一致桶：缺失/多出行按主键行集比对全量暴露；字段级值差异按 `int(md5(pk + '#sample')[:8], 16) % 100 < 抽样率` 确定性抽样后交给 diff_engine；
   5. 输出桶矩阵 + 跳过率（`match 桶数 / 总桶数`）+ 全量扫描成本估算（`桶数 × 单桶平均耗时`，实测后回填）。
-- 失败态：源表主键含 NULL → 批次 `failed`，`reason=null_primary_key`；空桶（0/0）记 `empty` 不计不一致；
+- 坏记录隔离（v2）：源表主键含 NULL 不再整批 `failed`——坏记录带「所属表对 / 来源端 / 原主键位置 /
+  隔离原因 / 整行快照」写入 `quarantine_records`，不参与桶 count/checksum、不计入一致；同批其他表
+  照常出结论。批次逐表给 `verified`（可验收）/ `quarantined`（含隔离，待处理）/ `blocked`（配置阻塞）
+  结论：全部 verified → `completed`，否则 `partial`。空桶（0/0）记 `empty` 不计不一致；
   主键重复由 diff_engine 标 `duplicate_key`。
+- 增量重跑（幂等）：重跑前先快照表级结论，仅重算「含未解决隔离项」或「结论非 verified」的受影响表；
+  已 verified 且无未解决隔离项的表直接跳过，桶结果/差异/计数原样保留。修数后原位置恢复非空主键的
+  隔离项自动置 `resolved`，全部表 verified 后批次转 `completed`；全验收后再触发则幂等早退。
 
 ### B. 差异定位与归因 `backend/src/services/diff_engine.py`
 
@@ -121,6 +131,7 @@ gb-553/
 |---|---|---|---|
 | `Role` | `backend/src/constants/enums.py` + `constants/roles.py` 能力矩阵 | `frontend/src/constants/enums.ts` | `models/user.py`、`middlewares/rbac.py`、Login 页角色提示 |
 | `BatchStatus` | `backend/src/constants/enums.py` | `frontend/src/constants/enums.ts` | `recon_engine.py` 状态机、`BatchDetail` 状态印章、seed 批次 |
+| `PairRunStatus` / `QuarantineReason` | `backend/src/constants/enums.py` | `frontend/src/constants/enums.ts` | `recon_engine.py` 逐表结论与隔离判定、`PairVerdictPanel`、`QuarantinePanel` |
 | `BucketStatus` | `backend/src/constants/enums.py` | `frontend/src/constants/enums.ts` | `recon_engine.py` 桶判定、`BucketMatrix` 图例 |
 | `DiffType` | `backend/src/constants/enums.py` | `frontend/src/constants/enums.ts` | `diff_engine.py` 分类与归因、`Diffs` 页筛选 chip |
 | `TicketStatus` | `backend/src/constants/enums.py` | `frontend/src/constants/enums.ts` | `ticket_service.py` 状态机、`Tickets` 页台账 |
@@ -134,8 +145,9 @@ gb-553/
 
 `pairs=5`（orders/order_item/customer/payment/refund）、源表 12,000 行、目标表 11,968 行；
 4 个批次：completed（128 桶 / 5% 抽样，真实跑出 5 个不一致桶、40 行差异 = 12 类型截断 + 8 编码 + 20 缺失）、
-running（payment，桶 64，已算前 16 桶）、failed（refund，`null_primary_key`）、pending（orders，桶 256）；
-3 张修复单（draft / submitted / approved）；3 个演示账号。
+running（payment，桶 64，已算前 16 桶）、partial（refund：1 行主键 NULL 已隔离 `quarantine=1`，其余 7 行真实缺失正常出结论）、
+pending（orders，桶 256）；3 张修复单（draft / submitted / approved）；3 个演示账号。
+隔离区表 `quarantine_records` 记录坏记录的所属表对、来源端、原主键位置、主键列名、隔离原因与整行快照。
 
 ## License
 

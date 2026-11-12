@@ -11,6 +11,18 @@ export const BATCH_STATUS_LABELS: Record<string, string> = {
   running: '对账中',
   completed: '已完成',
   failed: '失败',
+  partial: '部分完成（含隔离记录）',
+};
+
+export const PAIR_RUN_STATUS_LABELS: Record<string, string> = {
+  verified: '可验收',
+  quarantined: '待处理（含隔离记录）',
+  blocked: '阻塞',
+  pending: '未执行',
+};
+
+export const QUARANTINE_REASON_LABELS: Record<string, string> = {
+  null_primary_key: '主键为空（null_primary_key）',
 };
 
 export const BUCKET_STATUS_LABELS: Record<string, string> = {

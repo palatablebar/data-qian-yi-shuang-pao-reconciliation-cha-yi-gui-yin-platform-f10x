@@ -12,4 +12,5 @@ export const KNOWN_FAILURE_LABELS: Record<string, string> = {
   pair_inactive: '表对已暂停（pair_inactive）',
   no_pairs: '批次未包含表对（no_pairs）',
   duplicate_key: '主键重复（duplicate_key）',
+  quarantined_records: '存在已隔离的坏记录（quarantined_records），修数后重跑受影响表即可',
 };

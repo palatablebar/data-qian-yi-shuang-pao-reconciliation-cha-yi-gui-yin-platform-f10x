@@ -73,6 +73,8 @@ def dispatch_run(db: Session, batch: ReconBatch) -> dict[str, Any]:
         raise AppError(codes.BATCH_ALREADY_RUNNING, "批次正在运行中", f"batch_id={batch.id}")
     if batch.status == BatchStatus.COMPLETED.value:
         raise AppError(codes.BATCH_INVALID_STATE, "批次已完成，请新建批次重跑", f"batch_id={batch.id}")
+    # partial：部分表仍有隔离/阻塞项，修数后允许直接重跑——引擎只重算受影响表，
+    # 已完成（verified）的表重复执行不重复计数。
     # 先落 running 再投递：worker 可能秒级完成，避免入队后本地 commit 把 completed 覆盖回 running
     batch.status = BatchStatus.RUNNING.value
     batch.started_at = batch.started_at or now()

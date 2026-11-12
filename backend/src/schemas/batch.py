@@ -22,7 +22,11 @@ class BatchCreateRequest(BaseModel):
         return value
 
 
+from src.schemas.quarantine import serialize_pair_result
+
+
 def serialize_batch(batch: Any, include_pairs: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    pair_results_json = batch.pair_results_json or {}
     return {
         "id": batch.id,
         "batch_no": batch.batch_no,
@@ -41,6 +45,10 @@ def serialize_batch(batch: Any, include_pairs: list[dict[str, Any]] | None = Non
         "tgt_rows": batch.tgt_rows,
         "skip_rate": float(batch.skip_rate or 0),
         "diff_count": batch.diff_count,
+        "quarantine_count": int(getattr(batch, "quarantine_count", 0) or 0),
+        "pair_results": [
+            serialize_pair_result(code, pair_results_json.get(code) or {}) for code in (batch.pair_codes or [])
+        ],
         "failure_reason": batch.failure_reason,
         "params_json": batch.params_json,
         "scan_cost_json": batch.scan_cost_json,

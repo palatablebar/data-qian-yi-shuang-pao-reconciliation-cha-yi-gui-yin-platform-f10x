@@ -1,5 +1,5 @@
 import { download, get, post } from './client';
-import type { Batch, Bucket, Estimate } from '../types/models';
+import type { Batch, Bucket, Estimate, QuarantineResponse } from '../types/models';
 
 export function listBatches(): Promise<{ items: Batch[]; total: number }> {
   return get<{ items: Batch[]; total: number }>('/batches');
@@ -18,6 +18,17 @@ export interface BucketMatrixResponse {
 
 export function getBuckets(id: number): Promise<BucketMatrixResponse> {
   return get<BucketMatrixResponse>(`/batches/${id}/buckets`);
+}
+
+export function getQuarantine(
+  id: number,
+  params?: { pair_code?: string; resolved?: boolean },
+): Promise<QuarantineResponse> {
+  const search = new URLSearchParams();
+  if (params?.pair_code) search.set('pair_code', params.pair_code);
+  if (params?.resolved !== undefined) search.set('resolved', String(params.resolved));
+  const suffix = search.toString() ? `?${search.toString()}` : '';
+  return get<QuarantineResponse>(`/batches/${id}/quarantine${suffix}`);
 }
 
 export interface CreateBatchPayload {

@@ -1,20 +1,22 @@
-/** /batches/:id 批次详情：桶热力矩阵 + 进度 + 归因摘要 + 导出。 */
+/** /batches/:id 批次详情：桶热力矩阵 + 进度 + 逐表验收结论 + 隔离区 + 归因摘要 + 导出。 */
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { exportAttribution, getBuckets, runBatch } from '../api/batches';
+import { exportAttribution, getBuckets, getQuarantine, runBatch } from '../api/batches';
 import { getSummary } from '../api/diffs';
 import { AttributionList } from '../components/common/AttributionList';
 import { BucketMatrix } from '../components/common/BucketMatrix';
 import { CountUp } from '../components/common/CountUp';
 import { ErrorNote } from '../components/common/ErrorNote';
 import { LoadingRule } from '../components/common/LoadingRule';
+import { PairVerdictPanel } from '../components/common/PairVerdictPanel';
+import { QuarantinePanel } from '../components/common/QuarantinePanel';
 import { StatLedger } from '../components/common/StatLedger';
 import { StatusSeal } from '../components/common/StatusSeal';
 import { BATCH_STATUS_LABELS, DIFF_TYPE_LABELS, STRATEGY_LABELS } from '../constants/enums';
 import { KNOWN_FAILURE_LABELS } from '../constants/labels';
 import { useBatchPolling } from '../hooks/useBatchPolling';
 import { useAuthStore } from '../stores/authStore';
-import type { Bucket, DiffSummary } from '../types/models';
+import type { Bucket, DiffSummary, QuarantineResponse } from '../types/models';
 import { errorMessage } from '../utils/errorMessage';
 import { formatInt, formatMs, formatPercent } from '../utils/formatNumber';
 import { formatTime } from '../utils/formatTime';
@@ -25,6 +27,7 @@ export function BatchDetail() {
   const { batch, reload, polling } = useBatchPolling(batchId, null);
   const [buckets, setBuckets] = useState<Bucket[]>([]);
   const [summary, setSummary] = useState<DiffSummary | null>(null);
+  const [quarantine, setQuarantine] = useState<QuarantineResponse | null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [running, setRunning] = useState(false);
@@ -38,11 +41,18 @@ export function BatchDetail() {
   }, [batchId, batch?.status, batch?.buckets_matched, batch?.buckets_mismatched]);
 
   useEffect(() => {
-    if (!batchId || batch?.status !== 'completed') return;
+    if (!batchId || (batch?.status !== 'completed' && batch?.status !== 'partial')) return;
     getSummary(batchId)
       .then((data) => setSummary(data))
       .catch(() => undefined);
   }, [batchId, batch?.status]);
+
+  useEffect(() => {
+    if (!batchId || (batch?.status !== 'partial' && batch?.status !== 'failed')) return;
+    getQuarantine(batchId)
+      .then(setQuarantine)
+      .catch(() => undefined);
+  }, [batchId, batch?.status, batch?.quarantine_count]);
 
   const onRun = async () => {
     if (!batchId) return;
@@ -50,7 +60,11 @@ export function BatchDetail() {
     setNotice('');
     try {
       await runBatch(batchId);
-      setNotice('已投递 Celery 任务：worker 容器正在真跑分桶对账…');
+      setNotice(
+        batch?.status === 'partial'
+          ? '已投递 Celery 任务：只重算含隔离记录的受影响表，已验收表重复执行不重复计数…'
+          : '已投递 Celery 任务：worker 容器正在真跑分桶对账…',
+      );
       reload();
     } catch (err) {
       setError(errorMessage(err));
@@ -90,6 +104,11 @@ export function BatchDetail() {
                 <StatusSeal status="completed" label="已核" tone="green" />
               </span>
             ) : null}
+            {batch.status === 'partial' ? (
+              <span style={{ marginLeft: 16, verticalAlign: 'middle' }}>
+                <StatusSeal status="partial" label="部分完成 · 含隔离" />
+              </span>
+            ) : null}
           </h1>
         </div>
         <div className="page-head__meta">
@@ -116,6 +135,16 @@ export function BatchDetail() {
         />
       ) : null}
 
+      {batch.status === 'partial' ? (
+        <div className="error-note">
+          <strong>批次部分完成：坏记录已隔离，正常表照常出结论</strong>
+          <div>
+            {KNOWN_FAILURE_LABELS[batch.failure_reason || ''] || batch.failure_reason || '存在隔离记录'}
+            ；隔离记录不计入一致。请按下方隔离区修数后重跑，系统只重算受影响表，已验收表不重复计数。
+          </div>
+        </div>
+      ) : null}
+
       <StatLedger
         cells={[
           { label: '桶总数', value: <CountUp value={batch.bucket_count} />, hint: `已计算 ${formatInt(computed)} 桶` },
@@ -138,7 +167,13 @@ export function BatchDetail() {
               .join(' / ') || '无差异',
             tone: batch.diff_count > 0 ? 'red' : 'green',
           },
-          { label: '扫描行数', value: <CountUp value={batch.src_rows} />, hint: `目标端 ${formatInt(batch.tgt_rows)} 行` },
+          {
+            label: '隔离记录',
+            value: <CountUp value={batch.quarantine_count || 0} />,
+            hint: '坏记录单独隔离，不计入一致',
+            tone: (batch.quarantine_count || 0) > 0 ? 'red' : 'green',
+          },
+          { label: '扫描行数', value: <CountUp value={batch.src_rows} />, hint: `目标端 ${formatInt(batch.tgt_rows)} 行（不含隔离行）` },
           {
             label: '实际耗时',
             value: formatMs(Number(scanCost.elapsed_ms || 0)),
@@ -164,9 +199,13 @@ export function BatchDetail() {
       ) : null}
 
       <div className="row" style={{ marginBottom: 22 }}>
-        {canRun && (batch.status === 'pending' || batch.status === 'failed') ? (
+        {canRun && (batch.status === 'pending' || batch.status === 'failed' || batch.status === 'partial') ? (
           <button className="btn btn--primary" type="button" onClick={onRun} disabled={running}>
-            {running ? '入队中…' : '运行对账（Celery）'}
+            {running
+              ? '入队中…'
+              : batch.status === 'partial'
+                ? '修数后重跑受影响表（Celery）'
+                : '运行对账（Celery）'}
           </button>
         ) : null}
         <Link className="btn btn--ghost" to={`/diffs?batch_id=${batch.id}`}>
@@ -183,6 +222,33 @@ export function BatchDetail() {
           涉及表对：{batch.pair_codes.join(' / ')}
         </span>
       </div>
+
+      {batch.pair_results && batch.pair_results.length > 0 ? (
+        <section className="panel">
+          <div className="panel__head">
+            <h2 style={{ fontSize: 'var(--step-1)' }}>逐表验收结论</h2>
+            <span className="panel__note">
+              可验收 {formatInt(batch.pair_results.filter((item) => item.status === 'verified').length)} 张 ·
+              待处理 {formatInt(batch.pair_results.filter((item) => item.status !== 'verified').length)} 张
+            </span>
+          </div>
+          <PairVerdictPanel pairResults={batch.pair_results} pairs={batch.pairs} />
+        </section>
+      ) : null}
+
+      {quarantine && quarantine.items.length > 0 ? (
+        <section className="panel">
+          <div className="panel__head">
+            <h2 style={{ fontSize: 'var(--step-1)' }}>坏记录隔离区</h2>
+            <span className="panel__note">隔离记录不属于一致结论，修数清理后重跑受影响表即可</span>
+          </div>
+          <QuarantinePanel
+            records={quarantine.items}
+            openCount={quarantine.open_count}
+            resolvedCount={quarantine.resolved_count}
+          />
+        </section>
+      ) : null}
 
       <section className="panel">
         <div className="panel__head">
@@ -209,15 +275,18 @@ export function BatchDetail() {
         </section>
       ) : null}
 
-      <section className="panel">
-        <div className="panel__head">
-          <h2 style={{ fontSize: 'var(--step-1)' }}>差异归因（后端聚合）</h2>
-          <span className="panel__note">
-            总差异 {formatInt(summary?.total_diffs ?? batch.diff_count)} 行 · 跳过率 {formatPercent(batch.skip_rate)}
-          </span>
-        </div>
-        {summary ? <AttributionList summary={summary} limit={8} /> : <LoadingRule label="正在读取归因摘要…" />}
-      </section>
+      {batch.status === 'completed' || batch.status === 'partial' ? (
+        <section className="panel">
+          <div className="panel__head">
+            <h2 style={{ fontSize: 'var(--step-1)' }}>差异归因（后端聚合）</h2>
+            <span className="panel__note">
+              总差异 {formatInt(summary?.total_diffs ?? batch.diff_count)} 行 · 跳过率 {formatPercent(batch.skip_rate)}
+              （不含隔离记录）
+            </span>
+          </div>
+          {summary ? <AttributionList summary={summary} limit={8} /> : <LoadingRule label="正在读取归因摘要…" />}
+        </section>
+      ) : null}
     </>
   );
 }

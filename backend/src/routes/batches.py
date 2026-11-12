@@ -60,6 +60,17 @@ def list_buckets(
     return batch_controller.list_buckets(batch_id, status, user, db)
 
 
+@router.get("/{batch_id}/quarantine")
+def list_quarantine(
+    batch_id: int,
+    pair_code: str | None = None,
+    resolved: bool | None = None,
+    user=Depends(batch_controller.require_permission("batches:read")),
+    db=Depends(get_db),
+) -> dict:
+    return batch_controller.list_quarantine(batch_id, pair_code, resolved, user, db)
+
+
 @router.get("/{batch_id}/attribution")
 def attribution(
     batch_id: int,

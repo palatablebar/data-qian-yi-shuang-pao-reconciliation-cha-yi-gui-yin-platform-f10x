@@ -2,7 +2,7 @@
 from src.models.base import Base
 from src.models.account import AuditLog, User
 from src.models.catalog import TablePair
-from src.models.recon import BucketResult, ReconBatch
+from src.models.recon import BucketResult, QuarantineRecord, ReconBatch
 from src.models.trace import DiffDetail, RepairTicket
 from src.models import demo_tables  # noqa: F401  (注册 src_* / tgt_* 演示表)
 
@@ -13,6 +13,7 @@ __all__ = [
     "TablePair",
     "ReconBatch",
     "BucketResult",
+    "QuarantineRecord",
     "DiffDetail",
     "RepairTicket",
 ]

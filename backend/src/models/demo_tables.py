@@ -4,7 +4,7 @@
 - tgt_order_item.qty 故意定义为 INT（源 DECIMAL(8,2)）→ 12 行类型截断；
 - tgt_customer.phone 写入全角数字/零宽空格 → 8 行编码差异；
 - 两个方向各少写若干行 → missing 差异；
-- src_refund 含 1 行 refund_id IS NULL → failed 批次 null_primary_key。
+- src_refund 含 1 行 refund_id IS NULL → 该坏记录被隔离（quarantine_records），批次 partial 而非 failed。
 """
 from __future__ import annotations
 
@@ -100,7 +100,7 @@ tgt_payment = Table(
     Column("paid_at", DateTime, nullable=False),
 )
 
-# src_refund 的 refund_id 允许 NULL：用于验证 failed 批次 null_primary_key
+# src_refund 的 refund_id 允许 NULL：用于验证坏记录隔离（null_primary_key → 隔离区，批次 partial）
 src_refund = Table(
     "src_refund",
     Base.metadata,

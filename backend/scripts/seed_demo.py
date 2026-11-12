@@ -7,6 +7,7 @@
 - users / table_pairs 按自然键（email / pair.code）upsert，不覆盖用户改过的展示名；
 - src_* / tgt_* 演示行：先校验行数是否符合预期，符合则跳过（不覆盖人工改动），否则整表重建；
 - recon_batches 按 batch_no 跳过；repair_tickets 已存在则跳过；
+- 坏记录隔离区 quarantine_records 由引擎按 (批次, 表对, 来源端, 原主键位置, 原因) 幂等 upsert；
 - 结束时打印恰好一行 `SEED_SUMMARY k=v k=v ...`（键值顺序固定，两次运行逐字一致）。
 """
 from __future__ import annotations
@@ -32,7 +33,7 @@ from src.constants.roles import ROLE_ADMIN, ROLE_ANALYST, ROLE_VIEWER
 from src.models.account import User
 from src.models.catalog import TablePair
 from src.models.demo_tables import DEMO_TABLES
-from src.models.recon import BucketResult, ReconBatch
+from src.models.recon import BucketResult, QuarantineRecord, ReconBatch
 from src.models.trace import DiffDetail, RepairTicket
 from src.services import audit_service, auth_service, ticket_service
 from src.services.recon_engine import run_batch
@@ -146,7 +147,7 @@ PAIR_META = [
         "src_table": "src_refund",
         "tgt_table": "tgt_refund",
         "owner": "迁移组 · 李哲",
-        "description": "Oracle REFUND → MySQL refund；源端存在 1 行主键 NULL 脏数据，会阻塞批次。",
+        "description": "Oracle REFUND → MySQL refund；源端存在 1 行主键 NULL 脏数据，会被隔离而不阻塞整批。",
         "fields": [
             ("refund_id", "string"),
             ("order_id", "string"),
@@ -550,10 +551,10 @@ def seed_batches(db, users: dict[str, User]) -> dict[str, ReconBatch]:
             "bucket_count": 128,
             "sample_rate": 5,
             "window_days": 30,
-            "status": BatchStatus.FAILED.value,
+            "status": BatchStatus.PARTIAL.value,
             "created_by": users[ROLE_ADMIN].id,
-            "note": "退款单对账失败：源端存在主键 NULL 脏数据",
-            "run": "failed",
+            "note": "退款单对账：源端 1 行主键 NULL 已隔离，其余行正常出结论，修数后只重跑 refund",
+            "run": "quarantine",
         },
         {
             "batch_no": f"PC-{SEED_BATCH_DATE}-0004",
@@ -593,13 +594,16 @@ def seed_batches(db, users: dict[str, User]) -> dict[str, ReconBatch]:
 
     # 幂等：批次已存在（首次 seed 已真实跑过）就不再重跑
     b1 = batches[f"PC-{SEED_BATCH_DATE}-0001"]
-    if b1.status not in (BatchStatus.COMPLETED.value, BatchStatus.FAILED.value):
+    if b1.status not in (BatchStatus.COMPLETED.value, BatchStatus.FAILED.value, BatchStatus.PARTIAL.value):
         run_batch(b1.id)
     b2 = batches[f"PC-{SEED_BATCH_DATE}-0002"]
     if b2.status not in (BatchStatus.RUNNING.value, BatchStatus.COMPLETED.value):
         run_batch(b2.id, bucket_limit=16)
     b3 = batches[f"PC-{SEED_BATCH_DATE}-0003"]
-    if b3.status not in (BatchStatus.FAILED.value, BatchStatus.COMPLETED.value):
+    if b3.status not in (
+        BatchStatus.PARTIAL.value,
+        BatchStatus.COMPLETED.value,
+    ):
         result = run_batch(b3.id)
         print(f"SEED_NOTE entity=batch key={b3.batch_no} run={result}", flush=True)
     return batches
@@ -682,6 +686,7 @@ def _counts(db) -> dict[str, int]:
     batch_count = db.query(ReconBatch).count()
     diff_count = db.query(DiffDetail).count()
     ticket_count = db.query(RepairTicket).count()
+    quarantine_count = db.query(QuarantineRecord).filter(QuarantineRecord.resolved == 0).count()
     user_count = db.query(User).count()
     with engine.connect() as conn:
         src_rows = sum(
@@ -698,6 +703,7 @@ def _counts(db) -> dict[str, int]:
         "tgt_rows": tgt_rows,
         "batches": batch_count,
         "diffs": diff_count,
+        "quarantine": quarantine_count,
         "tickets": ticket_count,
         "users": user_count,
     }
@@ -750,8 +756,8 @@ def seed_all() -> dict[str, int]:
     print(
         "SEED_SUMMARY "
         f"pairs={counts['pairs']} src_rows={counts['src_rows']} tgt_rows={counts['tgt_rows']} "
-        f"batches={counts['batches']} diffs={counts['diffs']} tickets={counts['tickets']} "
-        f"users={counts['users']}",
+        f"batches={counts['batches']} diffs={counts['diffs']} quarantine={counts['quarantine']} "
+        f"tickets={counts['tickets']} users={counts['users']}",
         flush=True,
     )
     return counts

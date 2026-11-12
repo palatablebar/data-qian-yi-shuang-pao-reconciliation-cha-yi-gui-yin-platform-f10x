@@ -116,7 +116,7 @@ export function BatchNew() {
           <div className="panel">
             <div className="panel__head">
               <h2 style={{ fontSize: 'var(--step-1)' }}>选择表对</h2>
-              <span className="panel__note">本批次先验 3 张核心表；refund 待修 NULL 主键</span>
+              <span className="panel__note">坏记录（如主键 NULL）会被隔离，不再拖垮整批</span>
             </div>
             <ul className="check-list">
               {pairs.map((pair) => (
